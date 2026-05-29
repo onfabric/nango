@@ -9,6 +9,13 @@ const pbkdf2 = utils.promisify(crypto.pbkdf2);
 
 let encryption: Encryption | null = null;
 
+// Fixed pbkdf2 salt used for hashing when encryption is disabled (no key set).
+const NO_ENCRYPTION_SALT = 'nango-encryption-disabled';
+
+export function isEncryptionEnabled(): boolean {
+    return Boolean(envs.NANGO_ENCRYPTION_KEY);
+}
+
 function getEncryptionKey(): string {
     const encryptionKey = envs.NANGO_ENCRYPTION_KEY;
     if (!encryptionKey) {
@@ -26,6 +33,6 @@ export function getEncryption(): Encryption {
 }
 
 export async function hashValue(val: string): Promise<string> {
-    const encryptionKey = getEncryptionKey();
-    return (await pbkdf2(val, encryptionKey, 310000, 32, 'sha256')).toString('base64');
+    const salt = envs.NANGO_ENCRYPTION_KEY ?? NO_ENCRYPTION_SALT;
+    return (await pbkdf2(val, salt, 310000, 32, 'sha256')).toString('base64');
 }

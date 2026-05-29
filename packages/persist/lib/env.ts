@@ -1,4 +1,4 @@
 import { ENVS, parseEnvs } from '@nangohq/utils';
 
-// Encryption key is required for persist to store/retrieve records
-export const envs = parseEnvs(ENVS.required({ NANGO_ENCRYPTION_KEY: true }));
+// Encryption key is optional: when unset, records are stored unencrypted.
+export const envs = parseEnvs(ENVS);

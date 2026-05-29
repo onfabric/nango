@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 
 import { Err, Ok } from '@nangohq/utils';
 
-import { getEncryption, hashValue } from '../utils/encryption.js';
+import { getEncryption, hashValue, isEncryptionEnabled } from '../utils/encryption.js';
 
 import type { EntityType, PrivateKey } from '@nangohq/types';
 import type { Result } from '@nangohq/utils';
@@ -142,12 +142,19 @@ export function decryptPrivateKey(key: PrivateKey): Result<string | null, Privat
 }
 
 function encryptValue(keyValue: string): Buffer {
+    // Encryption disabled: store the value as plaintext (no iv/tag separators).
+    if (!isEncryptionEnabled()) {
+        return Buffer.from(keyValue);
+    }
     const encryption = getEncryption();
     const [encrypted, iv, tag] = encryption.encryptSync(keyValue);
     return Buffer.from(`${encrypted}:${iv}:${tag}`);
 }
 
 function decryptValue(encryptedValue: Buffer): Result<string, PrivateKeyError> {
+    if (!isEncryptionEnabled()) {
+        return Ok(encryptedValue.toString());
+    }
     const encryption = getEncryption();
     const [encrypted, iv, tag] = encryptedValue.toString().split(':');
     if (!encrypted || !iv || !tag) {

@@ -33,6 +33,11 @@ export async function decryptRecordData(record: FormattedRecord): Promise<Unencr
 }
 
 export function encryptRecords(records: FormattedRecord[]): FormattedRecord[] {
+    // Encryption disabled: store records as plaintext. decryptRecordData()
+    // detects unencrypted rows (no `encryptedValue`) and returns them as-is.
+    if (!envs.NANGO_ENCRYPTION_KEY) {
+        return records;
+    }
     const encryptionManager = getEncryption();
     const encryptedDataRecords: FormattedRecord[] = Object.assign([], records);
 
