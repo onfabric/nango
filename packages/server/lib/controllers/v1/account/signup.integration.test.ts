@@ -70,7 +70,8 @@ describe('POST /api/v1/account/signup', () => {
 
         expect(res.res.status).toBe(200);
         isSuccess(res.json);
-        expect(res.json.data.verified).toBe(false);
+        expect(res.json.data.verified).toBe(true);
         expect(typeof res.json.data.uuid).toBe('string');
+        expect(res.res.headers.getSetCookie().length).toBeGreaterThan(0);
     });
 });

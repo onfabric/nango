@@ -7,7 +7,6 @@ import { acceptInvitation, accountService, getInvitation, pbkdf2, userService } 
 import { flagHasUsage, report, requireEmptyQuery, zodErrorToHTTP } from '@nangohq/utils';
 
 import { envs } from '../../../env.js';
-import { sendVerificationEmail } from '../../../helpers/email.js';
 import { asyncWrapper } from '../../../utils/asyncWrapper.js';
 import { linkBillingCustomer, linkBillingFreeSubscription } from '../../../utils/billing.js';
 
@@ -111,7 +110,7 @@ export const signup = asyncWrapper<PostSignup>(async (req, res) => {
         hashed_password: hashedPassword,
         salt,
         account_id: account.id,
-        email_verified: token ? true : false,
+        email_verified: true,
         role: token ? invitationRole : envs.DEFAULT_USER_ROLE
     });
     if (!user) {
@@ -131,21 +130,6 @@ export const signup = asyncWrapper<PostSignup>(async (req, res) => {
         }
     }
 
-    // Ask for email validation if not coming from an invitation
-    if (!token) {
-        if (!user.email_verification_token) {
-            res.status(400).send({ error: { code: 'email_already_verified', message: 'Email address was already verified, please login.' } });
-            return;
-        }
-
-        await sendVerificationEmail(email, name, user.email_verification_token);
-
-        // We don't login because we want to enforce email validation
-        res.status(200).send({ data: { uuid: user.uuid, verified: false } });
-        return;
-    }
-
-    // Login directly if we are coming from an invitation
     req.login(user, function (err) {
         if (err) {
             res.status(500).send({ error: { code: 'server_error', message: 'There was a problem logging in the user. Please reach out to support.' } });
