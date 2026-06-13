@@ -16,17 +16,21 @@ async function signupUser({ emailVerified }: { emailVerified: boolean }): Promis
 
     const signupRes = await api.fetch(signupRoute, {
         method: 'POST',
-        body: { email, name: 'Foobar', password, foundUs: 'tests' } as any
+        body: { email, name: 'Foobar', password, foundUs: 'tests' }
     });
 
     expect(signupRes.res.status).toBe(200);
     isSuccess(signupRes.json);
-    expect(signupRes.json.data.verified).toBe(false);
+    expect(signupRes.json.data.verified).toBe(true);
 
-    if (emailVerified) {
-        const createdUser = await userService.getUserByEmail(email);
-        expect(createdUser).toBeTruthy();
-        await userService.verifyUserEmail(createdUser!.id);
+    const createdUser = await userService.getUserByEmail(email);
+    expect(createdUser).toBeTruthy();
+    if (!createdUser) {
+        throw new Error('Expected signup to create a user');
+    }
+
+    if (!emailVerified) {
+        await userService.update({ id: createdUser.id, email_verified: false });
     }
 
     return { email, password };
@@ -46,7 +50,8 @@ describe(`POST ${signinRoute}`, () => {
 
         const { res, json } = await api.fetch(signinRoute, {
             method: 'POST',
-            body: { email, password, verified: true } as any
+            // @ts-expect-error invalid body on purpose
+            body: { email, password, verified: true }
         });
 
         expect(res.status).toBe(400);

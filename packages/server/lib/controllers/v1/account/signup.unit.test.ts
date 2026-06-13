@@ -10,17 +10,17 @@ import { envs } from '../../../env.js';
 import type * as NangoUtils from '@nangohq/utils';
 import type { Request, Response } from 'express';
 
-const { mockAcceptInvitation, mockGetInvitation, mockGetPlan, mockGetAccountById, mockGetUserByEmail, mockPbkdf2, mockCreateUser, mockSendVerificationEmail } =
+const { mockAcceptInvitation, mockGetInvitation, mockGetPlan, mockCreateAccount, mockGetAccountById, mockGetUserByEmail, mockPbkdf2, mockCreateUser } =
     vi.hoisted(() => {
         return {
             mockAcceptInvitation: vi.fn(),
             mockGetInvitation: vi.fn(),
             mockGetPlan: vi.fn(),
+            mockCreateAccount: vi.fn(),
             mockGetAccountById: vi.fn(),
             mockGetUserByEmail: vi.fn(),
             mockPbkdf2: vi.fn(),
-            mockCreateUser: vi.fn(),
-            mockSendVerificationEmail: vi.fn()
+            mockCreateUser: vi.fn()
         };
     });
 
@@ -31,6 +31,7 @@ vi.mock('@nangohq/database', () => ({
 vi.mock('@nangohq/shared', () => ({
     acceptInvitation: mockAcceptInvitation,
     accountService: {
+        createAccount: mockCreateAccount,
         getAccountById: mockGetAccountById
     },
     getInvitation: mockGetInvitation,
@@ -47,13 +48,10 @@ vi.mock('@nangohq/utils', async () => {
 
     return {
         ...actual,
-        flagHasPlan: false
+        flagHasPlan: false,
+        flagHasUsage: false
     };
 });
-
-vi.mock('../../../helpers/email.js', () => ({
-    sendVerificationEmail: mockSendVerificationEmail
-}));
 
 const nonDefaultRole = roles.find((role) => role !== envs.DEFAULT_USER_ROLE);
 
@@ -66,6 +64,7 @@ describe('signup', () => {
         vi.clearAllMocks();
         mockAcceptInvitation.mockResolvedValue(undefined);
         mockPbkdf2.mockResolvedValue(Buffer.from('hashed-password'));
+        mockCreateAccount.mockResolvedValue({ id: 7 });
         mockGetAccountById.mockResolvedValue({ id: 7 });
         mockGetUserByEmail.mockResolvedValue(null);
         mockCreateUser.mockResolvedValue({ uuid: crypto.randomUUID(), id: 11, account_id: 7, role: nonDefaultRole });
@@ -115,6 +114,47 @@ describe('signup', () => {
                 role: nonDefaultRole
             })
         );
+        expect(status).toHaveBeenCalledWith(200);
+        const payload = send.mock.calls[0]?.[0] as { data: { uuid: string; verified: boolean } } | undefined;
+
+        expect(payload?.data.verified).toBe(true);
+        expect(typeof payload?.data.uuid).toBe('string');
+    });
+
+    it('auto-verifies regular signups and logs them in', async () => {
+        const email = 'new-user@example.com';
+        const login = vi.fn((_user: unknown, callback: (err?: Error) => void) => callback());
+
+        const req = {
+            body: { email, name: 'New User', password: 'Password123!' },
+            query: {},
+            route: { path: '/api/v1/account/signup' },
+            originalUrl: '/api/v1/account/signup',
+            header: vi.fn(),
+            login
+        } as unknown as Request;
+        const status = vi.fn().mockReturnThis();
+        const send = vi.fn().mockReturnThis();
+        const res = {
+            status,
+            send
+        } as unknown as Response;
+
+        const next = vi.fn();
+
+        await signup(req, res, next);
+
+        expect(next).not.toHaveBeenCalled();
+        expect(mockCreateAccount).toHaveBeenCalledWith({ name: 'New User', email, foundUs: undefined });
+        expect(mockCreateUser).toHaveBeenCalledWith(
+            expect.objectContaining({
+                email,
+                account_id: 7,
+                email_verified: true,
+                role: envs.DEFAULT_USER_ROLE
+            })
+        );
+        expect(login).toHaveBeenCalled();
         expect(status).toHaveBeenCalledWith(200);
         const payload = send.mock.calls[0]?.[0] as { data: { uuid: string; verified: boolean } } | undefined;
 
