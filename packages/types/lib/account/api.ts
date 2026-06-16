@@ -17,7 +17,9 @@ export type PostSignup = Endpoint<{
         | ApiError<'user_already_exists'>
         | ApiError<'error_creating_account'>
         | ApiError<'invalid_invite_token'>
-        | ApiError<'email_not_verified'>;
+        | ApiError<'email_not_verified'>
+        | ApiError<'forbidden'>
+        | ApiError<'invite_required'>;
     Success: {
         data: {
             uuid: string;
@@ -162,7 +164,7 @@ export type PostManagedEmailVerification = Endpoint<{
     Body: {
         code: string;
     };
-    Error: ApiError<'invalid_verification_code'> | ApiError<'not_found'>;
+    Error: ApiError<'invalid_verification_code'> | ApiError<'not_found'> | ApiError<'forbidden'> | ApiError<'invite_required'>;
     Success: {
         data: {
             url: string;
@@ -177,7 +179,12 @@ export type GetManagedCallback = Endpoint<{
         code: string;
         state?: string | undefined;
     };
-    Error: ApiError<'error_creating_user'> | ApiError<'user_already_exists'> | ApiError<'error_creating_account'>;
+    Error:
+        | ApiError<'error_creating_user'>
+        | ApiError<'user_already_exists'>
+        | ApiError<'error_creating_account'>
+        | ApiError<'forbidden'>
+        | ApiError<'invite_required'>;
     Success: {
         data: {
             url: string;

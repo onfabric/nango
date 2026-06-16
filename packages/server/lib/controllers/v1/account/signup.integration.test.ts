@@ -1,8 +1,9 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { seeders } from '@nangohq/shared';
 import { nanoid } from '@nangohq/utils';
 
-import { isSuccess, runServer } from '../../../utils/tests.js';
+import { isError, runServer } from '../../../utils/tests.js';
 
 const route = '/api/v1/account/signup';
 let api: Awaited<ReturnType<typeof runServer>>;
@@ -62,16 +63,18 @@ describe('POST /api/v1/account/signup', () => {
         expect(res.res.status).toBe(400);
     });
 
-    it('should signup', async () => {
+    it('should require an invitation after a user exists', async () => {
+        await seeders.seedAccountEnvAndUser();
+
         const res = await api.fetch(route, {
             method: 'POST',
             body: { email: `${nanoid()}@example.com`, name: 'Foobar', password: 'aZ1-foobar!', foundUs: 'the internet' }
         });
 
-        expect(res.res.status).toBe(200);
-        isSuccess(res.json);
-        expect(res.json.data.verified).toBe(true);
-        expect(typeof res.json.data.uuid).toBe('string');
-        expect(res.res.headers.getSetCookie().length).toBeGreaterThan(0);
+        expect(res.res.status).toBe(403);
+        isError(res.json);
+        expect(res.json).toStrictEqual<typeof res.json>({
+            error: { code: 'invite_required', message: 'An account already exists. Ask an administrator to invite you.' }
+        });
     });
 });

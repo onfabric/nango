@@ -3,6 +3,7 @@ import * as uuid from 'uuid';
 import db from '@nangohq/database';
 import { ENVS, Err, Ok, parseEnvs } from '@nangohq/utils';
 
+import type { Knex } from '@nangohq/database';
 import type { DBUser } from '@nangohq/types';
 import type { Result } from '@nangohq/utils';
 
@@ -75,6 +76,12 @@ class UserService {
         return result.total ? parseInt(result.total, 10) : 0;
     }
 
+    async hasAnyUser(trx: Knex = db.knex): Promise<boolean> {
+        const result = await trx.select(db.knex.raw('1')).from<DBUser>('_nango_users').first();
+
+        return Boolean(result);
+    }
+
     async getAnUserByAccountId(accountId: number): Promise<DBUser | null> {
         const result = await db.knex
             .select('*')
@@ -112,7 +119,8 @@ class UserService {
         salt = '',
         account_id,
         email_verified,
-        role = envs.DEFAULT_USER_ROLE
+        role = envs.DEFAULT_USER_ROLE,
+        trx = db.knex
     }: {
         email: string;
         name: string;
@@ -121,9 +129,10 @@ class UserService {
         account_id: number;
         email_verified: boolean;
         role?: DBUser['role'];
+        trx?: Knex;
     }): Promise<DBUser | null> {
         const expires_at = new Date(new Date().getTime() + VERIFICATION_EMAIL_EXPIRATION);
-        const result: Pick<DBUser, 'id'>[] = await db.knex
+        const result: Pick<DBUser, 'id'>[] = await trx
             .from<DBUser>('_nango_users')
             .insert({
                 email,
