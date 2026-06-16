@@ -33,9 +33,13 @@ export async function decryptRecordData(record: FormattedRecord): Promise<Unencr
 }
 
 export function encryptRecords(records: FormattedRecord[]): FormattedRecord[] {
-    // Encryption disabled: store records as plaintext. decryptRecordData()
-    // detects unencrypted rows (no `encryptedValue`) and returns them as-is.
-    if (!envs.NANGO_ENCRYPTION_KEY) {
+    // Store records as plaintext when encryption is disabled, OR when records are
+    // explicitly kept plaintext (NANGO_RECORDS_PLAINTEXT) so the brain can read
+    // nango_records over SQL while credentials/configs/secrets stay encrypted under
+    // NANGO_ENCRYPTION_KEY. decryptRecordData() detects unencrypted rows (no
+    // `encryptedValue`) and returns them as-is, so mixed plaintext/encrypted rows
+    // are safe.
+    if (!envs.NANGO_ENCRYPTION_KEY || process.env['NANGO_RECORDS_PLAINTEXT'] === 'true') {
         return records;
     }
     const encryptionManager = getEncryption();
