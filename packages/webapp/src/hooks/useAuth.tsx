@@ -177,7 +177,7 @@ export function useSignupAPI() {
               json: PostSignup['Success'];
           }
         | {
-              status: 400;
+              status: 400 | 403;
               json: PostSignup['Errors'];
           },
         APIError,
@@ -196,7 +196,7 @@ export function useSignupAPI() {
                 };
             }
 
-            if (res.status === 400) {
+            if (res.status === 400 || res.status === 403) {
                 return {
                     status: res.status,
                     json: (await res.json()) as PostSignup['Errors']

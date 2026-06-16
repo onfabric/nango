@@ -10,7 +10,8 @@ import { envs } from '../../../env.js';
 import { asyncWrapper } from '../../../utils/asyncWrapper.js';
 import { linkBillingCustomer, linkBillingFreeSubscription } from '../../../utils/billing.js';
 
-import type { DBTeam, PostSignup, Role } from '@nangohq/types';
+import type { Knex } from '@nangohq/database';
+import type { DBTeam, DBUser, PostSignup, Role } from '@nangohq/types';
 
 export const passwordSchema = z
     .string()
@@ -29,6 +30,49 @@ const validation = z
         foundUs: z.string().optional()
     })
     .strict();
+
+const bootstrapSignupLockKey = 'nango_bootstrap_signup';
+const invitationRequiredMessage = 'An account already exists. Ask an administrator to invite you.';
+
+function emailsMatch(first: string, second: string): boolean {
+    return first.trim().toLowerCase() === second.trim().toLowerCase();
+}
+
+async function hashPassword(password: string): Promise<{ hashedPassword: string; salt: string }> {
+    const salt = crypto.randomBytes(16).toString('base64');
+    const hashedPassword = (await pbkdf2(password, salt, 310000, 32, 'sha256')).toString('base64');
+
+    return { hashedPassword, salt };
+}
+
+async function createUser({
+    email,
+    name,
+    accountId,
+    hashedPassword,
+    salt,
+    role,
+    trx
+}: {
+    email: string;
+    name: string;
+    accountId: number;
+    hashedPassword: string;
+    salt: string;
+    role: Role;
+    trx?: Knex;
+}): Promise<DBUser | null> {
+    return await userService.createUser({
+        email,
+        name,
+        hashed_password: hashedPassword,
+        salt,
+        account_id: accountId,
+        email_verified: true,
+        role,
+        ...(trx ? { trx } : {})
+    });
+}
 
 export const signup = asyncWrapper<PostSignup>(async (req, res) => {
     const emptyQuery = requireEmptyQuery(req);
@@ -67,12 +111,18 @@ export const signup = asyncWrapper<PostSignup>(async (req, res) => {
         return;
     }
 
+    const { hashedPassword, salt } = await hashPassword(password);
     let account: DBTeam | null;
+    let user: DBUser | null;
     let invitationRole: Role = envs.DEFAULT_USER_ROLE;
     if (token) {
-        // Invitation signup
         const validToken = await getInvitation(token);
         if (!validToken) {
+            res.status(400).send({ error: { code: 'invalid_invite_token', message: 'The token used was found to be invalid.' } });
+            return;
+        }
+
+        if (!emailsMatch(validToken.email, email)) {
             res.status(400).send({ error: { code: 'invalid_invite_token', message: 'The token used was found to be invalid.' } });
             return;
         }
@@ -84,35 +134,63 @@ export const signup = asyncWrapper<PostSignup>(async (req, res) => {
         }
 
         invitationRole = validToken.role;
-        await acceptInvitation(token);
+        const invitedAccount = account;
+        user = await db.knex.transaction(async (trx) => {
+            const created = await createUser({ email, name, accountId: invitedAccount.id, hashedPassword, salt, role: invitationRole, trx });
+            if (!created) {
+                return null;
+            }
+
+            await acceptInvitation(token, trx);
+            return created;
+        });
     } else {
         if (!envs.AUTH_ALLOW_SIGNUP) {
             res.status(403).send({ error: { code: 'forbidden', message: 'Signup is disabled.' } });
             return;
         }
 
-        // Regular account
-        account = await accountService.createAccount({ name, email, foundUs });
-        if (!account) {
+        const result = await db.knex.transaction(async (trx) => {
+            await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [bootstrapSignupLockKey]);
+
+            if (await userService.hasAnyUser(trx)) {
+                return { blocked: true as const };
+            }
+
+            const createdAccount = await accountService.createAccount({ name, email, foundUs, trx });
+            if (!createdAccount) {
+                return { error: 'error_creating_account' as const };
+            }
+
+            const createdUser = await createUser({ email, name, accountId: createdAccount.id, hashedPassword, salt, role: envs.DEFAULT_USER_ROLE, trx });
+            if (!createdUser) {
+                return { error: 'error_creating_user' as const };
+            }
+
+            return { account: createdAccount, user: createdUser };
+        });
+
+        if ('blocked' in result) {
+            res.status(403).send({ error: { code: 'invite_required', message: invitationRequiredMessage } });
+            return;
+        }
+
+        if ('error' in result && result.error === 'error_creating_account') {
             res.status(500).send({
                 error: { code: 'error_creating_account', message: 'There was a problem creating the account. Please reach out to support.' }
             });
             return;
         }
+
+        if ('error' in result && result.error === 'error_creating_user') {
+            res.status(500).send({ error: { code: 'error_creating_user', message: 'There was a problem creating the user. Please reach out to support.' } });
+            return;
+        }
+
+        account = result.account;
+        user = result.user;
     }
 
-    // Create user
-    const salt = crypto.randomBytes(16).toString('base64');
-    const hashedPassword = (await pbkdf2(password, salt, 310000, 32, 'sha256')).toString('base64');
-    const user = await userService.createUser({
-        email,
-        name,
-        hashed_password: hashedPassword,
-        salt,
-        account_id: account.id,
-        email_verified: true,
-        role: token ? invitationRole : envs.DEFAULT_USER_ROLE
-    });
     if (!user) {
         res.status(500).send({ error: { code: 'error_creating_user', message: 'There was a problem creating the user. Please reach out to support.' } });
         return;

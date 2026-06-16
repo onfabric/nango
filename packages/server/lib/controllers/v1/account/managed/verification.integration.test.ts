@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { userService } from '@nangohq/shared';
+import db from '@nangohq/database';
+import { inviteEmail, seeders, userService } from '@nangohq/shared';
 import { nanoid } from '@nangohq/utils';
 
 import type { runServer as runServerType } from '../../../../utils/tests.js';
@@ -44,7 +45,7 @@ describe(`POST ${route}`, () => {
         vi.resetModules();
         ({ runServer } = await import('../../../../utils/tests.js'));
         api = await runServer();
-    });
+    }, 120_000);
 
     afterAll(() => {
         api.server.close();
@@ -64,9 +65,14 @@ describe(`POST ${route}`, () => {
         expect(workosMocks.authenticateWithCode).not.toHaveBeenCalled();
     });
 
-    it('should complete the pending WorkOS email verification flow and create the local user', async () => {
+    it('should complete the pending WorkOS email verification flow and create an invited local user', async () => {
         const email = `${nanoid()}@example.com`;
         const verificationCode = '123456';
+        const seed = await seeders.seedAccountEnvAndUser();
+        const invitation = await db.knex.transaction(async (trx) => {
+            return await inviteEmail({ email, name: email, accountId: seed.account.id, invitedByUserId: seed.user.id, role: 'administrator', trx });
+        });
+        const state = Buffer.from(JSON.stringify({ token: invitation!.token })).toString('base64');
 
         workosMocks.authenticateWithCode.mockRejectedValue({
             rawData: {
@@ -89,7 +95,7 @@ describe(`POST ${route}`, () => {
 
         expect(await userService.getUserByEmail(email)).toBeNull();
 
-        const callbackRes = await fetch(`${api.url}/api/v1/login/callback?code=oauth_code_123`, {
+        const callbackRes = await fetch(`${api.url}/api/v1/login/callback?code=oauth_code_123&state=${encodeURIComponent(state)}`, {
             redirect: 'manual'
         });
 
@@ -122,7 +128,7 @@ describe(`POST ${route}`, () => {
         expect(postVerificationRes.res.status).toBe(200);
         expect(postVerificationRes.json).toStrictEqual({
             data: {
-                url: 'http://localhost:3003/onboarding/hear-about-us'
+                url: 'http://localhost:3003/'
             }
         });
 
@@ -138,7 +144,8 @@ describe(`POST ${route}`, () => {
         expect(createdUser).toMatchObject({
             email,
             email_verified: true,
-            name: 'Managed User'
+            name: 'Managed User',
+            account_id: seed.account.id
         });
 
         const verificationAfterSuccess = await api.fetch('/api/v1/account/managed/verification', {

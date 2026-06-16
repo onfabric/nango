@@ -35,6 +35,13 @@ interface ManagedAuthVerificationRequiredError {
     };
 }
 
+const bootstrapSignupLockKey = 'nango_bootstrap_signup';
+const invitationRequiredMessage = 'An account already exists. Ask an administrator to invite you.';
+
+function emailsMatch(first: string, second: string): boolean {
+    return first.trim().toLowerCase() === second.trim().toLowerCase();
+}
+
 export function parseManagedAuthState(state: string): InviteAccountState | null {
     try {
         const res = JSON.parse(Buffer.from(state, 'base64').toString('ascii'));
@@ -133,7 +140,7 @@ export async function finalizeManagedAuthentication({
     let invitation: DBInvitation | null = null;
     if (state?.token) {
         invitation = await getInvitation(state.token);
-        if (!invitation || invitation.email !== authorizedUser.email) {
+        if (!invitation || !emailsMatch(invitation.email, authorizedUser.email)) {
             res.status(400).send({ error: { code: 'not_found', message: 'Invitation does not exist or is expired' } });
             return;
         }
@@ -153,7 +160,66 @@ export async function finalizeManagedAuthentication({
             name = nanoid();
         }
 
-        if (organizationId) {
+        if (!invitation) {
+            if (!envs.AUTH_ALLOW_SIGNUP) {
+                res.status(403).send({ error: { code: 'forbidden', message: 'Signup is disabled.' } });
+                return;
+            }
+
+            const organization = organizationId ? await workos.organizations.getOrganization(organizationId) : null;
+            const result = await db.knex.transaction(async (trx) => {
+                await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [bootstrapSignupLockKey]);
+
+                if (await userService.hasAnyUser(trx)) {
+                    return { blocked: true as const };
+                }
+
+                const resAccount = organization
+                    ? await accountService.getOrCreateAccount(organization.name, trx)
+                    : await accountService.createAccount({ name, email: authorizedUser.email, trx });
+                if (!resAccount) {
+                    return { error: 'error_creating_account' as const };
+                }
+
+                if (organization) {
+                    await expirePreviousInvitations({ accountId: resAccount.id, email: authorizedUser.email, trx });
+                }
+
+                const createdUser = await userService.createUser({
+                    email: authorizedUser.email,
+                    name,
+                    account_id: resAccount.id,
+                    email_verified: true,
+                    role: envs.DEFAULT_USER_ROLE,
+                    trx
+                });
+                if (!createdUser) {
+                    return { error: 'error_creating_user' as const };
+                }
+
+                return { account: resAccount, user: createdUser };
+            });
+
+            if ('blocked' in result) {
+                res.status(403).send({ error: { code: 'invite_required', message: invitationRequiredMessage } });
+                return;
+            }
+
+            if ('error' in result && result.error === 'error_creating_account') {
+                res.status(500).send({ error: { code: 'error_creating_account', message: 'Failed to create account' } });
+                return;
+            }
+
+            if ('error' in result && result.error === 'error_creating_user') {
+                res.status(500).send({
+                    error: { code: 'error_creating_user', message: 'There was a problem creating the user. Please reach out to support.' }
+                });
+                return;
+            }
+
+            account = result.account;
+            user = result.user;
+        } else if (organizationId) {
             const organization = await workos.organizations.getOrganization(organizationId);
 
             const resAccount = await accountService.getOrCreateAccount(organization.name);
@@ -163,37 +229,25 @@ export async function finalizeManagedAuthentication({
             }
 
             account = resAccount;
-
-            if (!invitation) {
-                await expirePreviousInvitations({ accountId: account.id, email: authorizedUser.email, trx: db.knex });
-            }
-        } else if (invitation) {
+        } else {
             isNewTeam = false;
             account = (await accountService.getAccountById(db.knex, invitation.account_id))!;
-        } else {
-            if (!envs.AUTH_ALLOW_SIGNUP) {
-                res.status(403).send({ error: { code: 'forbidden', message: 'Signup is disabled.' } });
-                return;
-            }
-
-            const resAccount = await accountService.createAccount({ name, email: authorizedUser.email });
-            if (!resAccount) {
-                res.status(500).send({ error: { code: 'error_creating_account', message: 'Failed to create account' } });
-                return;
-            }
-            account = resAccount;
         }
 
-        user = await userService.createUser({
-            email: authorizedUser.email,
-            name,
-            account_id: account.id,
-            email_verified: true,
-            role: invitation ? invitation.role : envs.DEFAULT_USER_ROLE
-        });
         if (!user) {
-            res.status(500).send({ error: { code: 'error_creating_user', message: 'There was a problem creating the user. Please reach out to support.' } });
-            return;
+            user = await userService.createUser({
+                email: authorizedUser.email,
+                name,
+                account_id: account.id,
+                email_verified: true,
+                role: invitation?.role ?? envs.DEFAULT_USER_ROLE
+            });
+            if (!user) {
+                res.status(500).send({
+                    error: { code: 'error_creating_user', message: 'There was a problem creating the user. Please reach out to support.' }
+                });
+                return;
+            }
         }
 
         if (isNewTeam && flagHasUsage) {

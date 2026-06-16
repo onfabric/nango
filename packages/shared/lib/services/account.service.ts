@@ -143,11 +143,11 @@ class AccountService {
         return account[0].uuid;
     }
 
-    async getOrCreateAccount(name: string): Promise<DBTeam | null> {
-        const account = await db.knex.select('*').from<DBTeam>(`_nango_accounts`).where({ name });
+    async getOrCreateAccount(name: string, trx: Knex = db.knex): Promise<DBTeam | null> {
+        const account = await trx.select('*').from<DBTeam>(`_nango_accounts`).where({ name });
 
         if (account == null || account.length == 0 || !account[0]) {
-            return await this.createAccount({ name });
+            return await this.createAccount({ name, trx });
         }
 
         return account[0];
@@ -157,30 +157,44 @@ class AccountService {
      * Create Account
      * @desc create a new account and assign to the default environments
      */
-    async createAccount({ name, email, foundUs = '' }: { name: string; email?: string | undefined; foundUs?: string | undefined }): Promise<DBTeam | null> {
-        return db.knex.transaction(async (trx) => {
+    async createAccount({
+        name,
+        email,
+        foundUs = '',
+        trx
+    }: {
+        name: string;
+        email?: string | undefined;
+        foundUs?: string | undefined;
+        trx?: Knex;
+    }): Promise<DBTeam | null> {
+        const create = async (innerTrx: Knex) => {
             const emailTeamName = emailToTeamName({ email });
             const teamName = `${emailTeamName || name}'s Team`;
-            const result = await trx.from<DBTeam>(`_nango_accounts`).insert({ name: teamName, found_us: foundUs }).returning('*');
+            const result = await innerTrx.from<DBTeam>(`_nango_accounts`).insert({ name: teamName, found_us: foundUs }).returning('*');
 
             if (!result[0]) {
-                trx.rollback();
                 return null;
             }
 
             if (flagHasPlan) {
                 const freePlan = plansList.find((plan) => plan.code === 'free');
-                const res = await createPlan(trx, { account_id: result[0].id, name: 'free', ...freePlan?.flags });
+                const res = await createPlan(innerTrx, { account_id: result[0].id, name: 'free', ...freePlan?.flags });
                 if (res.isErr()) {
                     report(res.error);
-                    // Rollback transaction
                     throw res.error;
                 }
             }
-            await environmentService.createDefaultEnvironments(trx, { accountId: result[0].id });
+            await environmentService.createDefaultEnvironments(innerTrx, { accountId: result[0].id });
             metrics.increment(metrics.Types.ACCOUNT_CREATED, 1, { accountId: result[0].id });
             return result[0];
-        });
+        };
+
+        if (trx) {
+            return create(trx);
+        }
+
+        return db.knex.transaction(create);
     }
 
     /**
